@@ -1,6 +1,7 @@
 import { Router, json, raw } from 'express'
 import {
   SpeechServiceError,
+  isSpeechConfigured,
   synthesizeSpeech,
   transcribeAudio,
 } from '../services/speechService.js'
@@ -28,6 +29,10 @@ function sendSpeechError(
   console.error('[speech]', error instanceof Error ? error.message : error)
   res.status(502).json({ success: false, message: "Speech couldn't process your audio right now." })
 }
+
+speechRouter.get('/status', (_req, res) => {
+  res.status(200).json({ configured: isSpeechConfigured() })
+})
 
 speechRouter.post(
   '/transcribe',

@@ -63,6 +63,10 @@ interface SynthesizeResponse {
   durationMs: number | null
 }
 
+interface StatusResponse {
+  configured: boolean
+}
+
 export interface TtsAudio {
   audioBase64: string
   mimeType: string
@@ -92,5 +96,16 @@ export const speechApi = {
       throw new SpeechApiError('server', 'Text-to-speech is not available right now.')
     }
     return { audioBase64: result.audioBase64, mimeType: result.mimeType, durationMs: result.durationMs }
+  },
+
+  async getStatus(): Promise<{ configured: boolean }> {
+    const result = await request<StatusResponse>('/api/speech/status', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    }, 10000)
+    if (!result || typeof result.configured !== 'boolean') {
+      throw new SpeechApiError('server', 'Voice mode is temporarily unavailable.')
+    }
+    return result
   },
 }

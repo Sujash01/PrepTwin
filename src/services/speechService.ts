@@ -1,24 +1,33 @@
-const DELAY = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+/**
+ * Frontend speech facade.
+ *
+ * Clean typed entry points for the interview's voice mode. No Azure
+ * credentials ever live here — every call is proxied to the server-side
+ * Azure AI Speech endpoints:
+ *
+ *   POST /api/speech/transcribe   (WAV in, text out)
+ *   POST /api/speech/synthesize   (text in, WAV audio out)
+ *   GET  /api/speech/status       (is Speech configured on the server?)
+ *
+ * The transport layer is `speechApi`; this module keeps the component layer
+ * decoupled from HTTP details.
+ */
+import { speechApi, type TtsAudio } from './speechApi'
 
-// TODO: Connect to Azure Speech MCP Server (Speech-to-Text + Text-to-Speech)
-// These functions simulate speech processing. Credentials must live in the backend,
-// never here or in client code.
+export interface SpeechStatus {
+  configured: boolean
+}
+
 export const speechService = {
-  // TODO: Replace with Azure Speech-to-Text transcription
-  async transcribeAudio(_audioBlob: Blob): Promise<string> {
-    await DELAY(2000)
-    return 'This is a mock transcription of the candidate\'s spoken answer. In production, this would connect to Azure Speech-to-Text.'
+  async transcribeAudio(wav: Blob): Promise<string> {
+    return speechApi.transcribe(wav)
   },
 
-  // TODO: Replace with Azure Text-to-Speech synthesis
-  async synthesizeSpeech(_text: string, _voice: string = 'en-US-AriaNeural'): Promise<Blob> {
-    await DELAY(1000)
-    return new Blob(['mock audio data'], { type: 'audio/mpeg' })
+  async synthesizeSpeech(text: string): Promise<TtsAudio> {
+    return speechApi.synthesize(text)
   },
 
-  // TODO: Replace with the backend voice catalog (Azure Neural voices)
-  async getVoices(): Promise<string[]> {
-    await DELAY(200)
-    return ['en-US-AriaNeural', 'en-US-GuyNeural', 'en-US-JennyNeural', 'en-GB-LibbyNeural']
+  async getSpeechStatus(): Promise<SpeechStatus> {
+    return speechApi.getStatus()
   },
 }

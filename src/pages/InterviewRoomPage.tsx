@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw, Settings, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw, Settings, Volume2, X } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { useCandidate, useToast } from '../hooks/useApp'
@@ -14,7 +14,7 @@ import { InterviewProgress } from '../components/interview/InterviewProgress'
 import { InterviewerCard } from '../components/interview/InterviewerCard'
 import type { InterviewerStatus } from '../components/interview/InterviewerCard'
 import { ResponseRecorder } from '../components/interview/ResponseRecorder'
-import type { RecorderState, RecorderErrorKind } from '../components/interview/ResponseRecorder'
+import type { AnswerMode, RecorderState, RecorderErrorKind } from '../components/interview/ResponseRecorder'
 import { InterviewInsights, AdaptiveStatus } from '../components/interview/InterviewInsights'
 import { ExitInterviewModal } from '../components/interview/ExitInterviewModal'
 import { cn } from '../utils/helpers'
@@ -25,7 +25,8 @@ import {
   releaseMicrophone,
 } from '../services/audioRecorder'
 import type { RecordingSession } from '../services/audioRecorder'
-import { speechApi } from '../services/speechApi'
+import { SpeechApiError } from '../services/speechApi'
+import { speechService } from '../services/speechService'
 import { playTtsBytes, stopTtsPlayback } from '../services/ttsPlayer'
 
 const FOCUS_LABELS: Record<InterviewFocus, string> = {
@@ -62,6 +63,18 @@ function classifyCaptureError(error: unknown): RecorderErrorKind {
   return 'audio'
 }
 
+function classifyTranscriptError(error: unknown): RecorderErrorKind {
+  if (error instanceof AudioCaptureError) {
+    return error.kind === 'permission-denied' || error.kind === 'no-device' ? 'permission' : 'audio'
+  }
+  if (error instanceof SpeechApiError) {
+    return error.kind === 'not-configured' || error.kind === 'network' || error.kind === 'server'
+      ? 'service'
+      : 'audio'
+  }
+  return 'service'
+}
+
 export function InterviewRoomPage() {
   const navigate = useNavigate()
   const { candidate } = useCandidate()
@@ -80,6 +93,8 @@ export function InterviewRoomPage() {
   const [recorderError, setRecorderError] = useState<RecorderErrorKind>(null)
   const [transcript, setTranscript] = useState('')
   const [isEditing, setIsEditing] = useState(false)
+  const [mode, setMode] = useState<AnswerMode>('text')
+  const [voiceAvailable, setVoiceAvailable] = useState(true)
   const [ttsUsed, setTtsUsed] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -113,16 +128,49 @@ export function InterviewRoomPage() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    speechService
+      .getSpeechStatus()
+      .then(status => {
+        if (cancelled) return
+        setVoiceAvailable(status.configured)
+        if (!status.configured) setMode('text')
+      })
+      .catch(() => {
+        if (!cancelled) setVoiceAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const speakQuestion = useCallback(async (text: string) => {
     setIsSpeaking(true)
     try {
-      const audio = await speechApi.synthesize(text)
+      const audio = await speechService.synthesizeSpeech(text)
       await playTtsBytes(audio.audioBase64, audio.mimeType)
       setTtsUsed(true)
     } catch {
-      // TTS unavailable — fall back to text-only mode; the question stays on screen.
+      // TTS failed — the question stays on screen as text.
+      showToast("Couldn't play the interviewer audio. The question is still available as text.", 'error')
     } finally {
       setIsSpeaking(false)
+    }
+  }, [showToast])
+
+  const stopListening = useCallback(() => {
+    stopTtsPlayback()
+    setIsSpeaking(false)
+  }, [])
+
+  const handleModeChange = useCallback((next: AnswerMode) => {
+    setMode(next)
+    if (next === 'text') {
+      stopTtsPlayback()
+      setIsSpeaking(false)
+      setRecorderError(null)
+      setRecorder(current => (current === 'error' ? 'idle' : current))
     }
   }, [])
 
@@ -144,11 +192,11 @@ export function InterviewRoomPage() {
       setQuestionNumber(1)
       setConversation([{ role: 'interviewer', text: result.question.text }])
       setPhase('ready')
-      void speakQuestion(result.question.text)
+      if (mode === 'voice') void speakQuestion(result.question.text)
     } catch {
       setPhase('error')
     }
-  }, [candidate, speakQuestion])
+  }, [candidate, speakQuestion, mode])
 
   useEffect(() => {
     if (!candidate || sessionStartedRef.current) return
@@ -187,17 +235,19 @@ export function InterviewRoomPage() {
           setRecorder('idle')
           setRecorderError(null)
           setPhase('ready')
-          void speakQuestion(result.question.text)
+          if (mode === 'voice') void speakQuestion(result.question.text)
         }
       } catch {
         setPhase('error')
       }
     },
-    [sessionId, speakQuestion],
+    [sessionId, speakQuestion, mode],
   )
 
   const startRecording = useCallback(async () => {
     if (phase !== 'ready' || recorder !== 'idle') return
+    stopTtsPlayback()
+    setIsSpeaking(false)
     setRecordingTime(0)
     setRecorderError(null)
     try {
@@ -221,13 +271,13 @@ export function InterviewRoomPage() {
     setRecorder('transcribing')
     try {
       const clip = await session.stop()
-      const text = await speechApi.transcribe(clip.wav)
+      const text = await speechService.transcribeAudio(clip.wav)
       setTranscript(text)
       setIsEditing(text.trim().length === 0)
       setRecordingTime(Math.round(clip.durationMs / 1000))
       setRecorder('ready')
-    } catch {
-      setRecorderError('audio')
+    } catch (error) {
+      setRecorderError(classifyTranscriptError(error))
       setRecorder('error')
     }
   }, [recorder])
@@ -240,6 +290,7 @@ export function InterviewRoomPage() {
   }, [])
 
   const continueWithoutMic = useCallback(() => {
+    setMode('text')
     setRecorderError(null)
     setTranscript('')
     setIsEditing(false)
@@ -368,6 +419,8 @@ export function InterviewRoomPage() {
   } else if (phase === 'ready') {
     if (isSpeaking) {
       caption = { text: 'PrepTwin is speaking...', spinner: false }
+    } else if (mode === 'text') {
+      caption = { text: 'PrepTwin is asking — type your answer below.', spinner: false }
     } else if (ttsUsed) {
       caption = { text: 'PrepTwin is listening — record or type your answer.', spinner: false }
     } else {
@@ -410,6 +463,22 @@ export function InterviewRoomPage() {
               </p>
             )}
 
+            {phase === 'ready' && question && (
+              <div className="flex justify-center">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => (isSpeaking ? stopListening() : void speakQuestion(question.text))}
+                  disabled={!voiceAvailable}
+                  aria-label={isSpeaking ? 'Stop question audio' : 'Listen to the question'}
+                  title={voiceAvailable ? undefined : 'Voice unavailable — question shown as text'}
+                >
+                  <Volume2 className="w-4 h-4 mr-2" aria-hidden="true" />
+                  {isSpeaking ? 'Stop' : 'Listen'}
+                </Button>
+              </div>
+            )}
+
             {phase === 'ready' && lastFeedback !== null && (
               <p className="-mt-2 text-center text-xs text-green-400/90 animate-fade-in" role="status">
                 {lastFeedback === 'analyzed' ? (
@@ -442,11 +511,14 @@ export function InterviewRoomPage() {
                 recordingTime={recordingTime}
                 isEditing={isEditing}
                 errorKind={recorderError}
+                mode={mode}
+                voiceAvailable={voiceAvailable}
                 disabled={phase !== 'ready'}
                 onStart={() => void startRecording()}
                 onStop={() => void stopRecording()}
                 onRetry={handleRetryAudio}
                 onContinueWithoutMic={continueWithoutMic}
+                onModeChange={handleModeChange}
                 onSubmit={submitAnswer}
                 onToggleEdit={() => setIsEditing(v => !v)}
                 onEditChange={setTranscript}
