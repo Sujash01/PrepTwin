@@ -33,17 +33,23 @@ interface PdfDocument {
   destroy: () => Promise<void>
 }
 
-// Polyfill browser globals required by pdfjs-dist / pdf-parse v2 if canvas optional binary is missing
-if (typeof (globalThis as unknown as Record<string, unknown>).DOMMatrix === 'undefined') {
-  ;(globalThis as unknown as Record<string, unknown>).DOMMatrix = class DOMMatrix {
-    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0
+/**
+ * pdf-parse v2 is built on pdfjs-dist, which expects DOMMatrix/ImageData/Path2D
+ * to exist even for pure text extraction (no rendering happens here). In Node,
+ * pdfjs-dist normally gets these from the optional native `@napi-rs/canvas`
+ * package; when that native binding fails to load (missing prebuilt binary for
+ * the platform, restricted/sandboxed environment, etc.) pdfjs-dist logs a
+ * warning but pdf-parse still references `DOMMatrix` unconditionally at
+ * require-time, which throws a bare ReferenceError and crashes the ENTIRE
+ * server before app.listen() ever runs - taking down every route, not just
+ * resume upload. These are inert stand-ins (never used for rendering, only so
+ * the module loads); real PDF rendering is never performed here, only text
+ * extraction, so the stubs never need real behavior.
+ */
+for (const name of ['DOMMatrix', 'ImageData', 'Path2D'] as const) {
+  if (typeof (globalThis as Record<string, unknown>)[name] === 'undefined') {
+    ;(globalThis as Record<string, unknown>)[name] = class {}
   }
-}
-if (typeof (globalThis as unknown as Record<string, unknown>).ImageData === 'undefined') {
-  ;(globalThis as unknown as Record<string, unknown>).ImageData = class ImageData {}
-}
-if (typeof (globalThis as unknown as Record<string, unknown>).Path2D === 'undefined') {
-  ;(globalThis as unknown as Record<string, unknown>).Path2D = class Path2D {}
 }
 
 const require = createRequire(import.meta.url)

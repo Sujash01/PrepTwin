@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n FRONTEND,BACKEND -c blue,green \"vite\" \"cmd /c \"\"npm --prefix server run dev < NUL\"\"\"",
+    "dev": "concurrently -n FRONTEND,BACKEND -c blue,green \"vite\" \"npm --prefix server run dev\"",
     "dev:backend": "npm --prefix server run dev",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
