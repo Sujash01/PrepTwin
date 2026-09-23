@@ -71,7 +71,6 @@ function deriveNextDifficulty(
 }
 
 interviewRouter.post('/start', async (req, res) => {
-  console.log('[Interview] POST /start request received', JSON.stringify(req.body))
   const body = (req.body ?? {}) as Record<string, unknown>
 
   const name = cleanString(body.name, 100)
@@ -183,6 +182,7 @@ interviewRouter.post('/message', async (req, res) => {
         scores: result.evaluation,
       })
     }
+    console.log(`[Interview] evaluation recorded=${result.evaluation ? 'true' : 'false'}`)
 
     const difficulty: InterviewDifficulty = isMockMode()
       ? result.question.difficulty

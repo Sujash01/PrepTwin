@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n FRONTEND,BACKEND -c blue,green \"vite\" \"npm --prefix server run dev\"",
-    "dev:backend": "npm --prefix server run dev",
+    "dev": "concurrently -k -n FRONTEND,BACKEND \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "vite",
+    "dev:backend": "npm --prefix server run start",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
