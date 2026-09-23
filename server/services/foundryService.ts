@@ -47,12 +47,16 @@ type OpenAIClient = ReturnType<AIProjectClient['getOpenAIClient']>
 export type InterviewDifficulty = 'Easy' | 'Medium' | 'Hard'
 export type FoundryMode = 'foundry' | 'local-mock'
 
+export type InterviewModeType = 'practice' | 'real'
+
 export interface CandidateProfile {
   name: string
   role: string
   experience: string
   skills: string[]
   focus: string
+  mode: InterviewModeType
+  questionCount: number
   /** Sanitized, truncated resume text. Never treated as instructions. */
   resumeText?: string
 }
@@ -222,6 +226,8 @@ const EVALUATION_SCHEMA_HINT = `{
 
 function buildCandidateContext(profile: CandidateProfile): string {
   const skills = profile.skills.length > 0 ? profile.skills.join(', ') : 'Not specified'
+  const modeLabel = profile.mode === 'practice' ? 'Practice Mode' : 'Real Interview Mode'
+  const questionCount = profile.questionCount ?? 10
   const lines = [STANDING_RULES]
   lines.push(
     'Interview session start - candidate profile for your reference:',
@@ -230,6 +236,8 @@ function buildCandidateContext(profile: CandidateProfile): string {
     `Experience level: ${profile.experience}`,
     `Key skills: ${skills}`,
     `Interview focus: ${profile.focus}`,
+    `Interview mode: ${modeLabel}`,
+    `Total questions: ${questionCount}`,
     '',
   )
 
@@ -249,9 +257,19 @@ function buildCandidateContext(profile: CandidateProfile): string {
 
   lines.push('')
   lines.push(
-    '[Reply format] Once the candidate starts answering, structure every reply as TWO parts separated by a line containing exactly <<<EVALUATION>>>:',
-    'PART 1 (before the marker): your next interview question, addressed naturally to the candidate.',
-    `PART 2 (after the marker): only a single valid JSON object - no prose, no markdown fences - matching exactly this schema: ${EVALUATION_SCHEMA_HINT}`,
+    '[OUTPUT PROTOCOL - STRICT]',
+    'For the FIRST message (this one), output ONLY the greeting and first interview question.',
+    'Do NOT include <<<EVALUATION>>> or any JSON in the first message.',
+    '',
+    '[OUTPUT PROTOCOL - FOR ALL SUBSEQUENT TURNS]',
+    'After the candidate answers, you MUST structure your reply as EXACTLY TWO PARTS separated by a line containing ONLY <<<EVALUATION>>>:',
+    'PART 1: Exactly ONE next interview question. Natural, conversational, addressed to the candidate. No extra commentary.',
+    `PART 2: ONLY a single valid JSON object - no prose, no markdown fences, nothing before or after - matching this schema: ${EVALUATION_SCHEMA_HINT}`,
+    'The JSON must be the very last thing in your response. No trailing text.',
+    '',
+    `INTERVIEW MODE: ${modeLabel}. ${profile.mode === 'practice' ? 'Be encouraging, allow retries, provide hints if asked. Do NOT end the interview early.' : 'Simulate a real interview: be professional, do not offer hints, do not allow retries. End after ' + questionCount + ' questions.'}`,
+    `TOTAL QUESTIONS: ${questionCount}. Track question count. After question ${questionCount}, provide a closing message and end the interview.`,
+    '',
     'Please greet the candidate and ask the first interview question to begin.',
   )
   return lines.join('\n')
@@ -262,7 +280,7 @@ function buildCandidateContext(profile: CandidateProfile): string {
  * structured two-part reply. `adaptation` is server-computed coaching guidance
  * (aggregates + trend) so the agent can adapt the next question.
  */
-export function buildAnswerFrame(answer: string, adaptation?: string): string {
+export function buildAnswerFrame(answer: string, adaptation?: string, context?: { questionNumber: number; totalQuestions: number; mode: 'practice' | 'real' }): string {
   const lines = [
     STANDING_RULES,
     '',
@@ -278,12 +296,27 @@ export function buildAnswerFrame(answer: string, adaptation?: string): string {
     lines.push(`[Server coaching guidance for your wording only] ${adaptation}`)
   }
 
+  if (context) {
+    const modeLabel = context.mode === 'practice' ? 'Practice Mode' : 'Real Interview Mode'
+    lines.push(
+      '',
+      '[CURRENT INTERVIEW STATE]',
+      `Question ${context.questionNumber} of ${context.totalQuestions}`,
+      `Mode: ${modeLabel}`,
+      context.mode === 'practice'
+        ? 'Encourage the candidate. Allow clarification. Be supportive.'
+        : 'Maintain professional interview demeanor. Do not offer hints or retries.',
+    )
+  }
+
   lines.push(
     '',
-    '[Your reply format - two parts, in one message]',
-    'PART 1 (before a line containing exactly <<<EVALUATION>>>): your next interview question. Ask about the candidate\'s own experience where possible, use the adaptation guidance to pick a reasonable difficulty, and if the last answer was incomplete or shallow ask a targeted follow-up instead of a brand-new topic.',
-    `PART 2 (after that line): ONLY a single valid JSON object with EXACTLY this schema and nothing else after it: ${EVALUATION_SCHEMA_HINT}`,
-    'Remember: the schema\'s confidence score means only observable answer qualities (clarity, decisiveness, hedging, completeness).',
+    '[OUTPUT PROTOCOL - STRICT]',
+    'You MUST respond with EXACTLY TWO PARTS separated by a line containing ONLY <<<EVALUATION>>>:',
+    'PART 1: Exactly ONE next interview question. Natural, conversational, addressed to the candidate. Ask about the candidate\'s own experience where possible. Use the adaptation guidance to pick a reasonable difficulty. If the last answer was incomplete or shallow, ask a targeted follow-up instead of a brand-new topic. No extra commentary, no refusal, no meta-text.',
+    `PART 2: ONLY a single valid JSON object - no prose, no markdown fences, nothing before or after - matching this schema: ${EVALUATION_SCHEMA_HINT}`,
+    'The JSON must be the very last thing in your response. No trailing text, no code fences, no explanatory prose.',
+    'Reminder: the confidence score means ONLY observable answer qualities (clarity, decisiveness, hedging, completeness).',
   )
   return lines.join('\n')
 }
@@ -314,6 +347,9 @@ function detectSessionEnd(text: string): boolean {
 interface FoundryConversationRef {
   conversationId: string
   createdAt: number
+  questionCount: number
+  totalQuestions: number
+  mode: 'practice' | 'real'
 }
 
 const chatConversations = new Map<string, FoundryConversationRef>()
@@ -339,9 +375,21 @@ function purgeConversationMap(store: Map<string, FoundryConversationRef>): void 
   }
 }
 
-function registerConversation(store: Map<string, FoundryConversationRef>, sessionId: string, conversationId: string): void {
+function registerConversation(
+  store: Map<string, FoundryConversationRef>,
+  sessionId: string,
+  conversationId: string,
+  totalQuestions: number = 10,
+  mode: 'practice' | 'real' = 'practice'
+): void {
   purgeConversationMap(store)
-  store.set(sessionId, { conversationId, createdAt: Date.now() })
+  store.set(sessionId, {
+    conversationId,
+    createdAt: Date.now(),
+    questionCount: 0,
+    totalQuestions,
+    mode,
+  })
 }
 
 function createProjectClient(): AIProjectClient {
@@ -376,12 +424,190 @@ async function createFoundryConversation(client: OpenAIClient): Promise<string> 
 const MAX_CONTENT_FILTER_RETRIES = 2
 const CONTENT_FILTER_RETRY_DELAY_MS = 1500
 
-/** The deployed agent occasionally answers benign inputs with a generic safety refusal instead of content. */
-function isAgentRefusal(text: string): boolean {
-  return /^i('m| am)? sorry,? but i (cannot|cannot|just can't) (assist|help)/i.test(text.trim())
+/**
+ * Extracts clean assistant text from Foundry response.output.
+ * The SDK's output_text concatenates ALL output_text parts from ALL message items with empty string,
+ * causing contamination when a refusal message is appended. We parse output directly to isolate
+ * the legitimate interview response.
+ */
+interface ExtractedAssistantText {
+  /** The clean question/answer text from the legitimate assistant message. */
+  text: string
+  /** True if any refusal was detected in the response (either as content part or inline). */
+  refusalDetected: boolean
+  /** True if the evaluation marker was found in the extracted text. */
+  hasEvaluationMarker: boolean
+  /** True if valid evaluation JSON was found after the marker. */
+  evaluationValid: boolean
 }
 
-async function sendFoundryResponse(client: OpenAIClient, conversationId: string, content: string): Promise<string> {
+function extractAssistantText(response: {
+  output?: Array<{
+    type?: string
+    role?: string
+    content?: Array<{ type?: string; text?: string; refusal?: string }>
+  }>
+}): ExtractedAssistantText {
+  const output = response.output ?? []
+  console.log(`[Interview] extractAssistantText: output.length=${output.length}`)
+  const assistantMessages: Array<{ text: string; hasRefusalPart: boolean }> = []
+
+  for (const item of output) {
+    console.log(`[Interview] extractAssistantText: item.type=${item.type}, item.role=${item.role}`)
+    if (item.type !== 'message' || item.role !== 'assistant' || !Array.isArray(item.content)) continue
+
+    let messageText = ''
+    let hasRefusalPart = false
+
+    for (const part of item.content) {
+      console.log(`[Interview] extractAssistantText: part.type=${part.type}`)
+      if (part.type === 'refusal' && typeof part.refusal === 'string') {
+        hasRefusalPart = true
+        console.log(`[Interview] extractAssistantText: found refusal part: ${part.refusal.substring(0, 50)}`)
+      } else if (part.type === 'output_text' && typeof part.text === 'string') {
+        messageText += part.text
+      }
+    }
+
+    if (messageText.length > 0) {
+      assistantMessages.push({ text: messageText.trim(), hasRefusalPart })
+    } else if (hasRefusalPart) {
+      // Pure refusal message (no output_text content)
+      assistantMessages.push({ text: '', hasRefusalPart: true })
+    }
+  }
+
+  console.log(`[Interview] extractAssistantText: assistantMessages=${assistantMessages.length}`)
+
+  // Find the legitimate (non-refusal) assistant message
+  // Strategy: prefer messages WITHOUT refusal parts. If all have refusal parts, try to clean the text.
+  let cleanText = ''
+  let refusalDetected = false
+
+  // First pass: look for messages without refusal parts
+  for (const msg of assistantMessages) {
+    if (!msg.hasRefusalPart && msg.text.length > 0) {
+      cleanText = msg.text
+      break
+    }
+  }
+
+  // Second pass: if all messages have refusal parts, try to clean the text
+  if (!cleanText) {
+    for (const msg of assistantMessages) {
+      if (msg.text.length > 0) {
+        // Try to remove refusal from the contaminated text
+        const cleaned = stripRefusalFromText(msg.text)
+        if (cleaned.length > 0) {
+          cleanText = cleaned
+          refusalDetected = true
+          console.log(`[Interview] extractAssistantText: stripped refusal from contaminated text`)
+          break
+        }
+      }
+    }
+  }
+
+  // If still no clean text, check for pure refusal
+  if (!cleanText) {
+    for (const msg of assistantMessages) {
+      if (msg.hasRefusalPart && msg.text.length === 0) {
+        refusalDetected = true
+        break
+      }
+    }
+  }
+
+  // Check for inline refusal in the extracted text
+  const hasInlineRefusal = /i('m| am)? sorry,? but i (cannot|cannot|just can't) (assist|help)/i.test(cleanText)
+  if (hasInlineRefusal) {
+    refusalDetected = true
+    console.log(`[Interview] extractAssistantText: inline refusal detected in cleanText`)
+  }
+
+  const hasEvaluationMarker = cleanText.includes('<<<EVALUATION>>>')
+  let evaluationValid = false
+  if (hasEvaluationMarker) {
+    const evalPart = cleanText.split('<<<EVALUATION>>>')[1]?.trim()
+    if (evalPart && evalPart.startsWith('{')) {
+      try {
+        JSON.parse(evalPart.split('\n')[0]) // quick check
+        evaluationValid = true
+      } catch {
+        evaluationValid = false
+      }
+    }
+  }
+
+  console.log(`[Interview] extractAssistantText: cleanText.length=${cleanText.length}, refusalDetected=${refusalDetected}`)
+
+  return {
+    text: cleanText,
+    refusalDetected,
+    hasEvaluationMarker,
+    evaluationValid,
+  }
+}
+
+/**
+ * Attempts to strip known refusal phrases from text, returning clean text if successful.
+ * Returns empty string if the text appears to be purely a refusal.
+ */
+function stripRefusalFromText(text: string): string {
+  const refusalPatterns = [
+    /i('m| am)? sorry,? but i (cannot|cannot|just can't) (assist|help)[^.]*\.?/gi,
+    /i('m| am)? sorry,? i (cannot|cannot|just can't) (assist|help)[^.]*\.?/gi,
+    /i (cannot|cannot|just can't) (assist|help) with (that|this) request\.?/gi,
+  ]
+
+  let cleaned = text
+  for (const pattern of refusalPatterns) {
+    cleaned = cleaned.replace(pattern, '').trim()
+  }
+
+  // If after stripping we have very little text left, it was mostly refusal
+  if (cleaned.length < 10) return ''
+
+  return cleaned
+}
+
+function logFoundryResponse(response: {
+  id?: string
+  output?: Array<{
+    type?: string
+    role?: string
+    content?: Array<{ type?: string; text?: string; refusal?: string }>
+  }>
+  output_text?: string
+}): ExtractedAssistantText {
+  const extracted = extractAssistantText(response)
+
+  const output = response.output ?? []
+  const itemTypes = output.map((item: any) => item.type).join(',')
+  const contentPartTypes: string[] = []
+
+  for (const item of output) {
+    if (item.type === 'message' && item.role === 'assistant' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        contentPartTypes.push(part.type ?? 'unknown')
+      }
+    }
+  }
+
+  console.log(`[Interview] Foundry response received`)
+  console.log(`[Interview] response id=${response.id ?? 'n/a'}`)
+  console.log(`[Interview] output items=${output.length} types=[${itemTypes}]`)
+  console.log(`[Interview] content part types=[${contentPartTypes.join(',')}]`)
+  console.log(`[Interview] output text length=${response.output_text?.length ?? 0}`)
+  console.log(`[Interview] refusal detected=${extracted.refusalDetected}`)
+  console.log(`[Interview] evaluation delimiter found=${extracted.hasEvaluationMarker}`)
+  console.log(`[Interview] evaluation valid=${extracted.evaluationValid}`)
+  console.log(`[Interview] extracted text length=${extracted.text.length}`)
+
+  return extracted
+}
+
+async function sendFoundryResponse(client: OpenAIClient, conversationId: string, content: string): Promise<ExtractedAssistantText> {
   let attempts = 0
   for (;;) {
     attempts += 1
@@ -390,14 +616,13 @@ async function sendFoundryResponse(client: OpenAIClient, conversationId: string,
         { conversation: conversationId, input: content },
         { body: { agent_reference: { name: agentName, type: 'agent_reference' } } },
       )
-      console.log(`[Foundry] response received id=${response.id ?? 'n/a'}`)
-      console.log(`[Foundry] output items: ${(response.output as unknown[] | undefined)?.length ?? 'n/a'}`)
-      const text = response.output_text?.trim()
-      console.log(`[Foundry] extracted text present=${text !== undefined} length=${text?.length ?? 0}`)
-      if (text) {
+      const extracted = logFoundryResponse(response)
+
+      if (extracted.text) {
         lastFoundryError = null
-        return text
+        return extracted
       }
+
       if (response.status && response.status !== 'completed') {
         throw new InterviewServiceError('upstream', `Agent response ended with status "${response.status}".`)
       }
@@ -426,23 +651,51 @@ async function sendFoundryResponse(client: OpenAIClient, conversationId: string,
   }
 }
 
+/**
+ * Sends a request to Foundry with ONE bounded retry on refusal.
+ * Returns the clean extracted text, or throws if both attempts fail/refuse.
+ */
+async function sendWithRefusalRetry(
+  client: OpenAIClient,
+  conversationId: string,
+  content: string
+): Promise<ExtractedAssistantText> {
+  // First attempt
+  let extracted = await sendFoundryResponse(client, conversationId, content)
+
+  if (extracted.refusalDetected) {
+    console.log(`[Interview] retrying refusal response`)
+    // Second attempt (bounded retry)
+    extracted = await sendFoundryResponse(client, conversationId, content)
+
+    if (extracted.refusalDetected || !extracted.text) {
+      throw new InterviewServiceError('upstream', 'The agent declined to respond.')
+    }
+  }
+
+  return extracted
+}
+
 export async function startInterview(profile: CandidateProfile): Promise<StartSessionResult> {
   if (isMockMode()) return startLocalInterview(profile)
 
   const client = createOpenAIClient()
   try {
     const conversationId = await createFoundryConversation(client)
-    let text = await sendFoundryResponse(client, conversationId, buildCandidateContext(profile))
-    if (isAgentRefusal(text)) {
-      console.log('[Foundry] interview-start guardrail refusal - retrying once')
-      text = await sendFoundryResponse(client, conversationId, buildCandidateContext(profile))
-      if (isAgentRefusal(text)) {
-        throw new InterviewServiceError('upstream', 'The agent declined to start the interview.')
-      }
-    }
+    const extracted = await sendWithRefusalRetry(
+      client,
+      conversationId,
+      buildCandidateContext(profile)
+    )
     const sessionId = `iv-${randomBytes(10).toString('hex')}`
-    registerConversation(interviewConversations, sessionId, conversationId)
-    return { sessionId, question: toQuestion(text), mode: 'foundry' }
+    registerConversation(
+      interviewConversations,
+      sessionId,
+      conversationId,
+      profile.questionCount,
+      profile.mode
+    )
+    return { sessionId, question: toQuestion(extracted.text), mode: 'foundry' }
   } catch (error) {
     if (error instanceof InterviewServiceError) throw error
     throw new InterviewServiceError('upstream', sanitizeFoundryMessage((error as Error).message))
@@ -458,15 +711,30 @@ export async function sendInterviewMessage(
 
   const ref = interviewConversations.get(sessionId)
   if (!ref) throw new InterviewServiceError('session', 'Interview session not found.')
+
+  // Increment question count
+  ref.questionCount += 1
+  const questionNumber = ref.questionCount
+  const totalQuestions = ref.totalQuestions
+  const mode = ref.mode
+
   const client = createOpenAIClient()
   try {
-    const text = await sendFoundryResponse(client, ref.conversationId, buildAnswerFrame(message, options.adaptation))
-    const parsed = parseAgentReply(text)
+    const extracted = await sendWithRefusalRetry(
+      client,
+      ref.conversationId,
+      buildAnswerFrame(message, options.adaptation, { questionNumber, totalQuestions, mode })
+    )
+    const parsed = parseAgentReply(extracted.text)
+
+    // Check if we've reached the total question limit or agent says complete
+    const isComplete = detectSessionEnd(parsed.text) || questionNumber >= totalQuestions
+
     return {
       sessionId,
       question: toQuestion(parsed.text),
       evaluation: parsed.evaluation,
-      isComplete: detectSessionEnd(parsed.text),
+      isComplete,
       mode: 'foundry',
     }
   } catch (error) {
@@ -529,10 +797,10 @@ export async function startChat(firstMessage?: string): Promise<ChatSendResult> 
           CHAT_STANDING_RULES,
           'Say hello as PrepTwin and invite the user to ask anything about interview prep.',
         ].join('\n')
-    const reply = await sendFoundryResponse(client, conversationId, content)
+    const extracted = await sendFoundryResponse(client, conversationId, content)
     const sessionId = `chat-${randomBytes(10).toString('hex')}`
     registerConversation(chatConversations, sessionId, conversationId)
-    return { sessionId, reply, mode: 'foundry' }
+    return { sessionId, reply: extracted.text, mode: 'foundry' }
   } catch (error) {
     if (error instanceof InterviewServiceError) throw error
     throw new InterviewServiceError('upstream', sanitizeFoundryMessage((error as Error).message))
@@ -546,8 +814,8 @@ export async function sendChatMessage(sessionId: string, message: string): Promi
   if (!ref) throw new InterviewServiceError('session', 'Chat session not found.')
   const client = createOpenAIClient()
   try {
-    const reply = await sendFoundryResponse(client, ref.conversationId, buildChatFrame(message))
-    return { sessionId, reply, mode: 'foundry' }
+    const extracted = await sendFoundryResponse(client, ref.conversationId, buildChatFrame(message))
+    return { sessionId, reply: extracted.text, mode: 'foundry' }
   } catch (error) {
     if (error instanceof InterviewServiceError) throw error
     throw new InterviewServiceError('upstream', sanitizeFoundryMessage((error as Error).message))

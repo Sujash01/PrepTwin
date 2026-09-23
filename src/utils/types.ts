@@ -1,5 +1,7 @@
 export type InterviewFocus = 'technical' | 'behavioral' | 'system-design' | 'projects' | 'mixed'
 
+export type InterviewModeType = 'practice' | 'real'
+
 export interface ResumeMetadata {
   fileName: string
   fileSize: number
@@ -29,6 +31,8 @@ export interface Candidate {
   experience: string
   skills: string[]
   focus: InterviewFocus
+  mode: InterviewModeType
+  questionCount: number
   resume: ResumeData | ResumeMetadata | null
   createdAt: Date
 }
@@ -40,6 +44,8 @@ export interface CandidateProfile {
   experience: string
   skills: string[]
   focus: InterviewFocus
+  mode: InterviewModeType
+  questionCount: number
   resume: ResumeMetadata | null
   createdAt: Date
 }

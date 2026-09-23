@@ -44,9 +44,6 @@ export function LandingNavbar() {
 
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
-            <Button variant="ghost" size="sm">
-              Sign In
-            </Button>
             <Link to="/setup">
               <Button size="sm">
                 Start Interview
@@ -93,9 +90,6 @@ export function LandingNavbar() {
             </Link>
             <div className="mt-2 pt-4 border-t border-surface-700/50 flex flex-col gap-2">
               <ThemeToggle className="justify-start" />
-              <Button variant="ghost" className="w-full">
-                Sign In
-              </Button>
               <Link to="/setup" onClick={() => setOpen(false)}>
                 <Button className="w-full">
                   Start Interview

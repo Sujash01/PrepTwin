@@ -26,6 +26,8 @@ export interface SessionProfile {
   experience: string
   skills: string[]
   focus: string
+  mode: 'practice' | 'real'
+  questionCount: number
 }
 
 export interface SessionConversationEntry {
@@ -101,6 +103,8 @@ export function createSession(
       experience: cleanEntryText(profile.experience, 100),
       skills: profile.skills.slice(0, 25).map(skill => cleanEntryText(skill, 100)),
       focus: cleanEntryText(profile.focus, 50),
+      mode: profile.mode,
+      questionCount: profile.questionCount,
     },
     conversation: [{ role: 'interviewer', text: cleanEntryText(greeting, 2000) }],
     evaluations: [],

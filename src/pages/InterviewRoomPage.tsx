@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw, Settings, Volume2, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw, Settings, Volume2, X, Download } from 'lucide-react'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { useCandidate, useToast } from '../hooks/useApp'
@@ -28,6 +28,46 @@ import type { RecordingSession } from '../services/audioRecorder'
 import { SpeechApiError } from '../services/speechApi'
 import { speechService } from '../services/speechService'
 import { playTtsBytes, stopTtsPlayback } from '../services/ttsPlayer'
+
+const TRANSCRIPT_STORAGE_KEY = 'preptwin-interview-transcript'
+
+interface SavedTranscript {
+  sessionId: string
+  candidateName: string
+  role: string
+  mode: 'practice' | 'real'
+  questionCount: number
+  conversation: ConversationEntry[]
+  elapsed: number
+  questionNumber: number
+  completedAt?: string
+}
+
+function saveTranscript(data: SavedTranscript): void {
+  try {
+    sessionStorage.setItem(TRANSCRIPT_STORAGE_KEY, JSON.stringify(data))
+  } catch {
+    // ignore
+  }
+}
+
+function loadTranscript(): SavedTranscript | null {
+  try {
+    const raw = sessionStorage.getItem(TRANSCRIPT_STORAGE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as SavedTranscript
+  } catch {
+    return null
+  }
+}
+
+function clearTranscript(): void {
+  try {
+    sessionStorage.removeItem(TRANSCRIPT_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+}
 
 const FOCUS_LABELS: Record<InterviewFocus, string> = {
   technical: 'Technical',
@@ -145,6 +185,28 @@ export function InterviewRoomPage() {
     }
   }, [])
 
+  // Load transcript from sessionStorage on mount
+  useEffect(() => {
+    if (!candidate) return
+    const saved = loadTranscript()
+    if (saved && saved.sessionId) {
+      setSessionId(saved.sessionId)
+      setConversation(saved.conversation)
+      setQuestionNumber(saved.questionNumber)
+      setElapsed(saved.elapsed)
+      if (saved.completedAt) {
+        setPhase('complete')
+      } else {
+        setPhase('ready')
+      }
+      // Restore last question if available
+      const lastInterviewer = [...saved.conversation].reverse().find(e => e.role === 'interviewer')
+      if (lastInterviewer) {
+        setQuestion({ text: lastInterviewer.text, difficulty: 'Medium', topic: '' })
+      }
+    }
+  }, [candidate])
+
   const speakQuestion = useCallback(async (text: string) => {
     setIsSpeaking(true)
     try {
@@ -178,6 +240,8 @@ export function InterviewRoomPage() {
     if (!candidate) return
     setPhase('connecting')
     setPendingAnswer(null)
+    // Clear any existing transcript when starting a new interview
+    clearTranscript()
     try {
       const result = await interviewApi.startInterview({
         name: candidate.name,
@@ -186,12 +250,25 @@ export function InterviewRoomPage() {
         skills: candidate.skills,
         focus: candidate.focus,
         resumeId: candidate.resume?.resumeId,
+        mode: candidate.mode,
+        questionCount: candidate.questionCount,
       })
       setSessionId(result.sessionId)
       setQuestion(result.question)
       setQuestionNumber(1)
-      setConversation([{ role: 'interviewer', text: result.question.text }])
+      const initialConversation: ConversationEntry[] = [{ role: 'interviewer', text: result.question.text }]
+      setConversation(initialConversation)
       setPhase('ready')
+      saveTranscript({
+        sessionId: result.sessionId,
+        candidateName: candidate!.name,
+        role: candidate!.role,
+        mode: candidate!.mode,
+        questionCount: candidate!.questionCount,
+        conversation: initialConversation,
+        elapsed: 0,
+        questionNumber: 1,
+      })
       if (mode === 'voice') void speakQuestion(result.question.text)
     } catch {
       setPhase('error')
@@ -218,23 +295,45 @@ export function InterviewRoomPage() {
       try {
         const result = await interviewApi.sendMessage(sessionId, text)
         setLastFeedback(result.feedback?.status ?? null)
-        setConversation(prev => [
-          ...prev,
-          { role: 'candidate', text },
-          { role: 'interviewer', text: result.question.text },
-        ])
+        const newConversation = [
+          { role: 'candidate' as const, text },
+          { role: 'interviewer' as const, text: result.question.text },
+        ]
+        setConversation(prev => [...prev, ...newConversation])
         setPendingAnswer(null)
+        const nextQuestionNumber = questionNumber + 1
         if (result.isComplete) {
           stopTtsPlayback()
           setIsSpeaking(false)
           setQuestion(result.question)
           setPhase('complete')
+          saveTranscript({
+            sessionId,
+            candidateName: candidate!.name,
+            role: candidate!.role,
+            mode: candidate!.mode,
+            questionCount: candidate!.questionCount,
+            conversation: [...conversation, ...newConversation],
+            elapsed,
+            questionNumber: nextQuestionNumber,
+            completedAt: new Date().toISOString(),
+          })
         } else {
           setQuestion(result.question)
-          setQuestionNumber(n => n + 1)
+          setQuestionNumber(nextQuestionNumber)
           setRecorder('idle')
           setRecorderError(null)
           setPhase('ready')
+          saveTranscript({
+            sessionId,
+            candidateName: candidate!.name,
+            role: candidate!.role,
+            mode: candidate!.mode,
+            questionCount: candidate!.questionCount,
+            conversation: [...conversation, ...newConversation],
+            elapsed,
+            questionNumber: nextQuestionNumber,
+          })
           if (mode === 'voice') void speakQuestion(result.question.text)
         }
       } catch {
@@ -314,7 +413,7 @@ export function InterviewRoomPage() {
 
   const handleExit = () => {
     setIsExitOpen(false)
-    showToast('Interview left. Your progress was cleared.', 'info')
+    showToast('Interview saved. You can view your transcript from the home page.', 'info')
     navigate('/')
   }
 
@@ -375,6 +474,32 @@ export function InterviewRoomPage() {
 
   if (phase === 'complete') {
     const duration = formatTime(elapsed)
+    const downloadTranscript = () => {
+      const saved = loadTranscript()
+      if (!saved) return
+      const lines = [
+        `PrepTwin Interview Transcript`,
+        `Candidate: ${saved.candidateName}`,
+        `Role: ${saved.role}`,
+        `Mode: ${saved.mode}`,
+        `Total Questions: ${saved.questionCount}`,
+        `Date: ${saved.completedAt ? new Date(saved.completedAt).toLocaleString() : 'N/A'}`,
+        `Duration: ${duration}`,
+        `---`,
+        ...saved.conversation.flatMap(e => [
+          `${e.role === 'interviewer' ? 'PrepTwin' : 'You'}: ${e.text}`,
+          '',
+        ]),
+      ].join('\n')
+      const blob = new Blob([lines], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `preptwin-transcript-${saved.sessionId}.txt`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
         <Card className="p-10 text-center max-w-lg w-full animate-scale-in">
@@ -403,11 +528,21 @@ export function InterviewRoomPage() {
               <span className="text-surface-400">Interview focus</span>
               <span className="text-surface-100 font-medium capitalize">{focusLabel}</span>
             </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-surface-400">Mode</span>
+              <span className="text-surface-100 font-medium capitalize">{candidate.mode}</span>
+            </div>
           </div>
 
-          <Button size="lg" className="w-full" onClick={() => navigate('/')}>
-            Back to Home
-          </Button>
+          <div className="flex flex-col gap-3">
+            <Button size="lg" className="w-full" onClick={downloadTranscript}>
+              <Download className="w-5 h-5 mr-2" aria-hidden="true" />
+              Download Transcript
+            </Button>
+            <Button size="lg" variant="ghost" className="w-full" onClick={() => navigate('/')}>
+              Back to Home
+            </Button>
+          </div>
         </Card>
       </div>
     )

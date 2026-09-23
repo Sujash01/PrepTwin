@@ -71,6 +71,7 @@ function deriveNextDifficulty(
 }
 
 interviewRouter.post('/start', async (req, res) => {
+  console.log('[Interview] POST /start request received', JSON.stringify(req.body))
   const body = (req.body ?? {}) as Record<string, unknown>
 
   const name = cleanString(body.name, 100)
@@ -98,7 +99,12 @@ interviewRouter.post('/start', async (req, res) => {
     return
   }
 
-  const profile: CandidateProfile = { name, role, experience, skills, focus }
+  const mode = body.mode === 'practice' || body.mode === 'real' ? body.mode : 'practice'
+  const questionCount = typeof body.questionCount === 'number' && body.questionCount > 0
+    ? Math.min(Math.max(body.questionCount, 1), 50)
+    : 10
+
+  const profile: CandidateProfile = { name, role, experience, skills, focus, mode, questionCount }
 
   const resumeId = cleanString(body.resumeId, 1000)
   const resumeContext = resumeId && RESUME_ID_PATTERN.test(resumeId)
@@ -109,14 +115,16 @@ interviewRouter.post('/start', async (req, res) => {
   }
 
   try {
+    console.log('[Interview] Calling startInterview with profile:', JSON.stringify({ name, role, experience, skills, focus, mode, questionCount }))
     const result = await startInterview(profile)
+    console.log('[Interview] startInterview succeeded:', result.sessionId)
     if (resumeContext) {
       consumeResumeContext(resumeContext.id)
     }
     createSession(
       result.sessionId,
       result.mode,
-      { name, role, experience, skills, focus },
+      { name, role, experience, skills, focus, mode, questionCount },
       result.question.text,
       topicTokens(result.question.topic),
     )
@@ -128,6 +136,7 @@ interviewRouter.post('/start', async (req, res) => {
       mode: result.mode,
     })
   } catch (error) {
+    console.error('[Interview] startInterview error:', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : '')
     handleError(res, error)
   }
 })

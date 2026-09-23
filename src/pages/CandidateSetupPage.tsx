@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ArrowRight, Sparkles, User, FileText } from 'lucide-react'
+import { ChevronLeft, ArrowRight, Sparkles, User, FileText, Check } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Card, CardTitle, CardDescription, CardContent } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
@@ -17,6 +17,7 @@ import { candidateService } from '../services/candidateService'
 import { resumeApi } from '../services/resumeApi'
 import { COMMON_SKILLS } from '../data/mockData'
 import type { Candidate, InterviewFocus, ResumeMetadata, ResumeData } from '../utils/types'
+import { cn } from '../utils/helpers'
 
 const ROLE_OPTIONS = [
   'Software Engineer',
@@ -44,6 +45,20 @@ const FOCUS_OPTIONS: Array<{ value: InterviewFocus; label: string }> = [
   { value: 'mixed', label: 'Mixed' },
 ]
 
+const MODE_OPTIONS = [
+  { value: 'practice', label: 'Practice', description: 'Relaxed pace, instant feedback, retry answers' },
+  { value: 'real', label: 'Real Interview', description: 'Timed, no retries, simulates real pressure' },
+] as const
+
+const QUESTION_COUNT_OPTIONS = [
+  { value: 5, label: '5 Questions', description: 'Quick screening interview' },
+  { value: 10, label: '10 Questions', description: 'Standard interview length' },
+  { value: 15, label: '15 Questions', description: 'Deep-dive technical interview' },
+  { value: 20, label: '20 Questions', description: 'Comprehensive assessment' },
+] as const
+
+type InterviewMode = 'practice' | 'real'
+
 interface SetupForm {
   name: string
   role: string
@@ -51,6 +66,8 @@ interface SetupForm {
   skills: string[]
   focus: InterviewFocus
   resume: ResumeMetadata | null
+  mode: InterviewMode
+  questionCount: number
 }
 
 export function CandidateSetupPage() {
@@ -71,6 +88,8 @@ export function CandidateSetupPage() {
           fileType: candidate.resume.fileType,
         }
       : null,
+    mode: 'practice',
+    questionCount: 10,
   })
 
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -181,6 +200,8 @@ export function CandidateSetupPage() {
       skills: form.skills,
       focus: form.focus,
       resume: form.resume,
+      mode: form.mode,
+      questionCount: form.questionCount,
     })
 
     const resumeData: ResumeData | null = saved.resume
@@ -200,6 +221,8 @@ export function CandidateSetupPage() {
       experience: saved.experience,
       skills: saved.skills,
       focus: saved.focus,
+      mode: saved.mode,
+      questionCount: saved.questionCount,
       resume: resumeData,
       createdAt: saved.createdAt,
     }
@@ -294,6 +317,86 @@ export function CandidateSetupPage() {
                   onChange={e => update('focus', e.target.value as InterviewFocus)}
                   helperText="What should the AI emphasize during the interview?"
                 />
+
+                <Divider />
+
+                <div className="space-y-6">
+                  <Card className="p-4 bg-surface-900/50 border-surface-700/50">
+                    <CardTitle className="text-base">Interview Mode</CardTitle>
+                    <CardDescription className="text-xs">Choose how you want to practice.</CardDescription>
+                    <div className="mt-4 grid gap-3">
+                      {MODE_OPTIONS.map(option => (
+                        <label
+                          key={option.value}
+                          className={cn(
+                            'relative cursor-pointer p-4 rounded-xl border-2 transition-all',
+                            form.mode === option.value
+                              ? 'border-primary-500 bg-primary-500/10'
+                              : 'border-surface-700 hover:border-primary-500/50'
+                          )}
+                        >
+                          <input
+                            type="radio"
+                            name="mode"
+                            value={option.value}
+                            checked={form.mode === option.value}
+                            onChange={() => update('mode', option.value as InterviewMode)}
+                            className="sr-only"
+                          />
+                          <div className="flex items-start gap-3">
+                            <div className={cn(
+                              'w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5 flex-shrink-0',
+                              form.mode === option.value
+                                ? 'border-primary-500 bg-primary-500'
+                                : 'border-surface-600'
+                            )}>
+                              {form.mode === option.value && (
+                                <Check className="w-3 h-3 text-white" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-surface-100">{option.label}</p>
+                              <p className="text-xs text-surface-500 mt-0.5">{option.description}</p>
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </Card>
+
+                  {form.mode === 'practice' && (
+                    <Card className="p-4 bg-surface-900/50 border-surface-700/50">
+                      <CardTitle className="text-base">Question Count</CardTitle>
+                      <CardDescription className="text-xs">How many questions should the interview have?</CardDescription>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        {QUESTION_COUNT_OPTIONS.map(option => (
+                          <label
+                            key={option.value}
+                            className={cn(
+                              'relative cursor-pointer p-4 rounded-xl border-2 transition-all text-center',
+                              form.questionCount === option.value
+                                ? 'border-primary-500 bg-primary-500/10'
+                                : 'border-surface-700 hover:border-primary-500/50'
+                            )}
+                          >
+                            <input
+                              type="radio"
+                              name="questionCount"
+                              value={option.value}
+                              checked={form.questionCount === option.value}
+                              onChange={() => update('questionCount', option.value)}
+                              className="sr-only"
+                            />
+                            <div>
+                              <p className="font-medium text-surface-100">{option.label}</p>
+                              <p className="text-xs text-surface-500 mt-0.5">{option.description}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </Card>
+                  )}
+                </div>
 
                 <Divider />
 

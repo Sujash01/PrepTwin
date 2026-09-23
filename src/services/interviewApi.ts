@@ -42,6 +42,10 @@ export interface StartInterviewPayload {
   focus: InterviewFocus
   /** Opaque server-side resume context token (optional). */
   resumeId?: string
+  /** Interview mode: practice or real */
+  mode?: 'practice' | 'real'
+  /** Number of questions for the interview */
+  questionCount?: number
 }
 
 export type InterviewApiErrorKind = 'network' | 'server' | 'bad-request'

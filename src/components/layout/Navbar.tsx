@@ -2,7 +2,6 @@ import { Link, useLocation } from 'react-router-dom'
 import { Brain, User, BarChart2, MessageCircle, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '../../utils/helpers'
-import { Button } from '../ui/Button'
 import { ThemeToggle } from '../ui/ThemeToggle'
 
 const NAV_ITEMS = [
@@ -52,11 +51,6 @@ export function Navbar() {
 
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
-            <Link to="/setup">
-              <Button variant="primary" size="sm">
-                Start Interview
-              </Button>
-            </Link>
           </div>
 
           <button
@@ -95,13 +89,6 @@ export function Navbar() {
               })}
               <div className="pt-2 border-t border-surface-700/50">
                 <ThemeToggle className="w-full justify-start" />
-              </div>
-              <div className="pt-2 border-t border-surface-700/50">
-                <Link to="/setup" onClick={() => setMobileMenuOpen(false)}>
-                  <Button variant="primary" className="w-full">
-                    Start Interview
-                  </Button>
-                </Link>
               </div>
             </div>
           </div>
